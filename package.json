@@ -1,0 +1,14 @@
+{
+  "name": "class-vote",
+  "version": "1.0.0",
+  "description": "Ethereum Sepolia on-chain voting system for classroom use",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "extract-abi": "node scripts/extract-abi.js"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.0"
+  }
+}
