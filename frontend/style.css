@@ -601,6 +601,65 @@ code {
   display: block;
 }
 
+/* ─── SCR-03: 결과 화면 (Phase 7) ──────────────────────────────── */
+.scr03-wrap {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--color-border);
+}
+
+.result-winner,
+.result-tie {
+  text-align: center;
+  padding: 28px 20px;
+  background: var(--color-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  margin-bottom: 28px;
+}
+.result-icon   { font-size: 3rem; display: block; margin-bottom: 8px; }
+.result-title  { font-size: 1.5rem; font-weight: 700; margin-bottom: 6px; }
+.result-names  { font-size: 1.25rem; font-weight: 600; color: var(--color-primary); }
+.result-sub    { color: var(--color-text-muted); margin-top: 4px; }
+.result-no-votes { text-align: center; color: var(--color-text-muted); padding: 20px 0; }
+
+.result-grid { margin-top: 0; }
+
+.result-card { position: relative; }
+.rank-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.result-vote-count {
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+  margin-top: 6px;
+}
+.result-vote-count strong { color: var(--color-text); }
+
+.result-admin-bar {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 2px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 /* ─── SCR-01: 투표 버튼 (Phase 6) ──────────────────────────────── */
 .btn-vote {
   width: 100%;

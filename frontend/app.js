@@ -985,17 +985,128 @@ async function handleVote(i) {
   }
 }
 
-/* SCR-03: Phase 7에서 구현 */
-function renderSCR03() {
-  dom["app-main"].innerHTML = `
-    <div class="placeholder-screen">
-      <p style="font-size:2.5rem">🏆</p>
-      <h2>투표 결과 화면</h2>
-      <p class="text-muted mt-4">컨트랙트: <code>${state.contractAddress}</code></p>
-      <p class="mt-4" style="font-size:0.8rem; color:var(--color-text-light)">
-        📌 SCR-03 — Phase 7에서 구현됩니다
-      </p>
+// ══════════════════════════════════════════════════════════════════════════════
+// SCR-03: 투표 결과 화면 (Phase 7)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** 득표수 기준 내림차순 정렬 → 동률 구분하여 결과 배열 반환 */
+function computeResults() {
+  const sorted = [...state.candidates]
+    .map((c, i) => ({ ...c, origIdx: i }))
+    .sort((a, b) => Number(b.voteCount) - Number(a.voteCount));
+
+  const maxVotes = sorted.length > 0 ? Number(sorted[0].voteCount) : 0;
+  const winners  = sorted.filter(c => Number(c.voteCount) === maxVotes);
+  const isTie    = winners.length > 1;
+
+  return { sorted, maxVotes, winners, isTie };
+}
+
+/** 결과 후보자 카드 HTML (순위 배지 + 득표 강조) */
+function resultCardHTML(c, rank, totalVotes, isWinner) {
+  const pct     = totalVotes > 0 ? Math.round(Number(c.voteCount) / totalVotes * 100) : 0;
+  const rankBadge = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `${rank}위`;
+  return `
+    <div class="candidate-card result-card ${isWinner ? "winner-card" : ""}" >
+      <div class="rank-badge">${rankBadge}</div>
+      <img src="${escHtml(c.photoUrl)}" alt="${escHtml(c.name)}"
+        class="candidate-photo"
+        onerror="this.style.display='none'">
+      <div class="candidate-name">${escHtml(c.name)}</div>
+      <div class="progress-bar">
+        <div class="progress-fill ${isWinner ? "winner" : ""}"
+          style="width:${pct}%"></div>
+      </div>
+      <div class="vote-count result-vote-count">
+        <strong>${c.voteCount}표</strong> (${pct}%)
+      </div>
     </div>`;
+}
+
+/* SCR-03: 투표 결과 화면 */
+function renderSCR03() {
+  const { sorted, maxVotes, winners, isTie } = computeResults();
+  const totalVotes = state.candidates.reduce((s, c) => s + Number(c.voteCount), 0);
+
+  // 순위 계산 (동률 처리: 같은 득표수면 같은 순위)
+  let rank = 1;
+  let prevVotes = null;
+  let sameRankCount = 0;
+  const rankedCards = sorted.map((c, idx) => {
+    const votes = Number(c.voteCount);
+    if (votes !== prevVotes) {
+      rank = rank + sameRankCount;
+      sameRankCount = 1;
+    } else {
+      sameRankCount++;
+    }
+    prevVotes = votes;
+    const isWinner = Number(c.voteCount) === maxVotes;
+    return resultCardHTML(c, rank, totalVotes, isWinner);
+  });
+
+  // 승자 발표 헤더
+  let winnerAnnouncement;
+  if (sorted.length === 0) {
+    winnerAnnouncement = `<p class="result-no-votes">투표 참여자가 없습니다.</p>`;
+  } else if (isTie) {
+    const names = winners.map(w => escHtml(w.name)).join(", ");
+    winnerAnnouncement = `
+      <div class="result-tie">
+        <span class="result-icon">🤝</span>
+        <h2 class="result-title">동률!</h2>
+        <p class="result-names">${names}</p>
+        <p class="result-sub">${maxVotes}표 동률</p>
+      </div>`;
+  } else {
+    winnerAnnouncement = `
+      <div class="result-winner">
+        <span class="result-icon">🏆</span>
+        <h2 class="result-title">최다 득표</h2>
+        <p class="result-names">${escHtml(winners[0].name)}</p>
+        <p class="result-sub">${maxVotes}표 (${totalVotes > 0 ? Math.round(maxVotes / totalVotes * 100) : 0}%)</p>
+      </div>`;
+  }
+
+  // 관리자 전용 "새 투표 만들기" 버튼
+  const adminBar = state.isOwner ? `
+    <div class="result-admin-bar">
+      <p class="text-muted" style="font-size:0.85rem">
+        이 컨트랙트는 재사용이 불가합니다. 새 투표를 만들려면 새 컨트랙트를 배포하세요.
+      </p>
+      <button id="btn-new-vote" class="btn btn-primary">+ 새 투표 만들기</button>
+    </div>` : "";
+
+  dom["app-main"].innerHTML = `
+    <div class="scr03-wrap">
+      <div class="result-header">
+        <span class="badge badge-ended">🔴 투표 종료</span>
+        <span class="text-muted">총 ${totalVotes}표 · ${state.candidates.length}명</span>
+      </div>
+
+      ${winnerAnnouncement}
+
+      <div class="candidate-grid result-grid">
+        ${rankedCards.join("") || '<p class="text-muted text-center" style="grid-column:1/-1">후보자가 없습니다.</p>'}
+      </div>
+
+      ${adminBar}
+    </div>`;
+
+  // 새 투표 만들기 버튼 이벤트
+  document.getElementById("btn-new-vote")?.addEventListener("click", () => {
+    localStorage.removeItem(STORAGE_KEY);
+    state.contractAddress = null;
+    state.contract        = null;
+    state.votingStatus    = null;
+    state.candidates      = [];
+    state.isOwner         = false;
+    state.hasVoted        = false;
+    stopPolling();
+    updateHeader();
+    updateFooter();
+    renderCurrentScreen();
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
