@@ -471,6 +471,45 @@ code {
   margin: 20px 0;
 }
 
+/* ─── SCR-00: 컨트랙트 배포/연결 화면 ──────────────────────────── */
+.scr00-wrap {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  border-radius: var(--radius-sm);
+}
+
+.deploy-status {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  margin-bottom: 12px;
+}
+.deploy-status.hidden  { display: none; }
+.deploy-status-info    { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.deploy-status-error   { background: var(--color-danger-bg); color: #991b1b; border: 1px solid #fca5a5; }
+
+.deploy-success { text-align: center; }
+.deploy-success-icon { font-size: 2.5rem; margin-bottom: 12px; }
+.deploy-success h3    { font-size: 1.2rem; margin-bottom: 4px; }
+
+.address-box {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-top: 6px;
+}
+.address-box code { flex: 1; min-width: 0; word-break: break-all; }
+
 /* ─── 반응형 ─────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
   .header-inner  { padding: 10px 14px; }

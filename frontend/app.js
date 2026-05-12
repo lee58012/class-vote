@@ -353,19 +353,240 @@ function renderCurrentScreen() {
   if (state.contract) startPolling();
 }
 
-/* SCR-00: Phase 3에서 구현 */
+// ══════════════════════════════════════════════════════════════════════════════
+// SCR-00: 컨트랙트 배포 / 투표 연결 (Phase 3)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// 배포 진행 중 플래그 — renderSCR00가 배포 UI를 덮어쓰는 것을 방지
+let deployInProgress = false;
+
+/** FR-00-8: 에러 타입별 한국어 안내 메시지 */
+function getDeployErrorMsg(err) {
+  const msg = err?.message?.toLowerCase() ?? "";
+  if (
+    err?.code === 4001 ||
+    err?.code === "ACTION_REJECTED" ||
+    err?.info?.error?.code === 4001 ||
+    msg.includes("user rejected") ||
+    msg.includes("user denied")
+  ) return "서명이 취소되었습니다. 다시 시도해주세요.";
+
+  if (
+    err?.code === "INSUFFICIENT_FUNDS" ||
+    msg.includes("insufficient funds")
+  ) return "Sepolia ETH가 부족합니다. Faucet에서 테스트 ETH를 받아주세요.";
+
+  return "네트워크 연결을 확인하고 다시 시도해주세요.";
+}
+
+/** 배포 카드 내부 상태 전환 (FR-00-3, FR-00-4, FR-00-7, FR-00-8) */
+function setDeployCardState(status, address, errorMsg) {
+  const btn      = document.getElementById("btn-deploy");
+  const statusEl = document.getElementById("deploy-status");
+  if (!btn || !statusEl) return;
+
+  statusEl.className = "deploy-status";
+
+  switch (status) {
+    case "awaiting-signature":
+      btn.disabled = true;
+      btn.innerHTML = `<span class="spinner"></span> MetaMask 서명 대기 중...`;
+      statusEl.classList.add("deploy-status-info");
+      statusEl.textContent = "⏳ MetaMask 서명 대기 중...";
+      break;
+
+    case "confirming":
+      btn.innerHTML = `<span class="spinner"></span> 배포 중...`;
+      statusEl.classList.add("deploy-status-info");
+      statusEl.textContent =
+        "⏳ 배포 트랜잭션 확인 중... (세폴리아 기준 약 12~15초 소요)";
+      break;
+
+    case "success": {
+      // FR-00-7: 공유 링크 자동 생성
+      const shareLink =
+        `${window.location.origin}${window.location.pathname}?contract=${address}`;
+      document.getElementById("card-deploy").innerHTML = `
+        <div class="deploy-success">
+          <div class="deploy-success-icon">✅</div>
+          <h3>컨트랙트 배포 완료!</h3>
+
+          <div class="form-group mt-4">
+            <div class="form-label">컨트랙트 주소:</div>
+            <div class="address-box">
+              <code>${address}</code>
+              <button class="btn btn-outline btn-sm"
+                onclick="copyText('${address}', this, '주소 복사됨!')">
+                📋 복사
+              </button>
+              <a href="https://sepolia.etherscan.io/address/${address}"
+                 target="_blank" rel="noopener noreferrer"
+                 class="btn btn-outline btn-sm">Etherscan 🔗</a>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div class="form-label">참여자에게 공유할 링크:</div>
+            <div class="address-box">
+              <code style="word-break:break-all">${shareLink}</code>
+              <button class="btn btn-outline btn-sm"
+                onclick="copyText('${shareLink}', this, '링크 복사됨!')">
+                📋 복사
+              </button>
+            </div>
+          </div>
+
+          <button id="btn-goto-voting" class="btn btn-primary btn-block mt-4">
+            ▶ 투표 관리 시작하기
+          </button>
+        </div>`;
+
+      document.getElementById("btn-goto-voting").addEventListener("click", () => {
+        deployInProgress = false;
+        renderCurrentScreen();
+      });
+      break;
+    }
+
+    case "error":
+      btn.disabled = false;
+      btn.innerHTML = "🚀 새 투표 컨트랙트 배포하기";
+      statusEl.classList.add("deploy-status-error");
+      statusEl.textContent = "❌ " + errorMsg;
+      deployInProgress = false;
+      break;
+  }
+}
+
+/** FR-00-1 ~ FR-00-4: 새 컨트랙트 배포 */
+async function deployContract() {
+  if (!state.signer) { showMetaMaskOverlay(); return; }
+
+  deployInProgress = true;
+  setDeployCardState("awaiting-signature");
+
+  try {
+    const factory  = new ethers.ContractFactory(VOTING_ABI, VOTING_BYTECODE, state.signer);
+    const contract = await factory.deploy();           // MetaMask 팝업
+
+    setDeployCardState("confirming");
+
+    await contract.deploymentTransaction().wait();     // 블록 확인
+
+    const address = await contract.getAddress();
+
+    // FR-00-4: localStorage 저장
+    state.contractAddress = address;
+    localStorage.setItem(STORAGE_KEY, address);
+
+    await connectContract(address);
+
+    setDeployCardState("success", address);
+    updateHeader();
+    updateFooter();
+
+  } catch (err) {
+    setDeployCardState("error", null, getDeployErrorMsg(err));
+  }
+}
+
+/** FR-00-6: 기존 컨트랙트 주소 직접 입력 후 연결 */
+async function connectExisting() {
+  const input   = document.getElementById("input-contract-addr");
+  const errorEl = document.getElementById("connect-error");
+  const btn     = document.getElementById("btn-connect-existing");
+  const address = input?.value.trim() ?? "";
+
+  errorEl.textContent = "";
+  errorEl.classList.add("hidden");
+
+  if (!address) {
+    errorEl.textContent = "컨트랙트 주소를 입력해주세요.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  if (!ethers.isAddress(address)) {
+    errorEl.textContent =
+      "유효하지 않은 이더리움 주소입니다. 0x로 시작하는 42자리 주소를 입력하세요.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner spinner-dark"></span> 연결 중...`;
+
+  try {
+    const ok = await connectContract(address);
+    if (ok) renderCurrentScreen();
+  } catch {
+    errorEl.textContent = "컨트랙트 연결 중 오류가 발생했습니다. 주소를 확인해주세요.";
+    errorEl.classList.remove("hidden");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "연결하기"; }
+  }
+}
+
+/** 클립보드 복사 헬퍼 (onclick 속성에서 전역 접근) */
+window.copyText = async function copyText(text, btn, successMsg) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const orig = btn.innerHTML;
+    btn.textContent = "✅ " + successMsg;
+    btn.disabled = true;
+    setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
+  } catch {
+    showToast("클립보드 복사에 실패했습니다.");
+  }
+};
+
+/* SCR-00: 컨트랙트 배포 / 투표 연결 화면 (FR-00-1 ~ FR-00-8) */
 function renderSCR00() {
+  if (deployInProgress) return; // 배포 중 UI 보호
+
   dom["app-main"].innerHTML = `
-    <div class="placeholder-screen">
-      <p style="font-size:2.5rem">🗳️</p>
-      <h2>온체인 투표 시스템</h2>
-      <p class="text-muted mt-4">
-        투표를 시작하려면 컨트랙트를 배포하거나<br>참여할 투표 주소를 입력하세요.
+    <div class="scr00-wrap">
+      <p class="text-center text-muted mb-4">
+        투표를 시작하려면 컨트랙트를 배포하거나, 참여할 투표 주소를 입력하세요.
       </p>
-      <p class="mt-6" style="font-size:0.8rem; color:var(--color-text-light)">
-        📌 SCR-00 — Phase 3에서 구현됩니다
-      </p>
+
+      <!-- 새 투표 만들기 (FR-00-1) -->
+      <div class="card" id="card-deploy">
+        <div class="card-title">🚀 새 투표 만들기 (새 컨트랙트 배포)</div>
+        <p class="text-muted mb-4">
+          MetaMask로 연결된 지갑이 이 투표의 관리자가 됩니다.<br>
+          배포 시 Sepolia 테스트넷 가스비가 발생합니다.
+        </p>
+        <div id="deploy-status" class="deploy-status hidden"></div>
+        <button id="btn-deploy" class="btn btn-primary btn-block"
+          ${!state.account ? "disabled" : ""}>
+          🚀 새 투표 컨트랙트 배포하기
+        </button>
+        <p class="text-muted mt-2" style="font-size:0.8rem">
+          ※ 지갑이 연결되지 않은 경우 버튼이 비활성화됩니다.
+        </p>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- 기존 투표에 참여하기 (FR-00-6) -->
+      <div class="card">
+        <div class="card-title">🔗 기존 투표에 참여하기 (컨트랙트 주소 직접 입력)</div>
+        <div class="form-group">
+          <label class="form-label" for="input-contract-addr">컨트랙트 주소:</label>
+          <input type="text" id="input-contract-addr" class="form-input"
+            placeholder="0x..." autocomplete="off" spellcheck="false">
+          <div id="connect-error" class="form-error hidden"></div>
+        </div>
+        <button id="btn-connect-existing" class="btn btn-primary">연결하기</button>
+      </div>
     </div>`;
+
+  document.getElementById("btn-deploy")
+    .addEventListener("click", deployContract);
+  document.getElementById("btn-connect-existing")
+    .addEventListener("click", connectExisting);
+  document.getElementById("input-contract-addr")
+    .addEventListener("keydown", e => { if (e.key === "Enter") connectExisting(); });
 }
 
 /* SCR-01: Phase 6에서 구현 */
