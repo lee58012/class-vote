@@ -510,10 +510,102 @@ code {
 }
 .address-box code { flex: 1; min-width: 0; word-break: break-all; }
 
+/* ─── SCR-01: 메인 투표 화면 ────────────────────────────────────── */
+.scr01-wrap {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  border: 1px solid transparent;
+}
+.status-banner-preparing {
+  background: var(--color-warning-bg);
+  border-color: #fde68a;
+}
+.status-banner-ongoing {
+  background: var(--color-success-bg);
+  border-color: #6ee7b7;
+}
+.status-banner-ended {
+  background: var(--color-danger-bg);
+  border-color: #fca5a5;
+}
+
+/* ─── 관리자 패널 (SCR-02) ──────────────────────────────────────── */
+.admin-panel {
+  margin-top: 32px;
+  border-top: 2px solid var(--color-border);
+  padding-top: 24px;
+}
+.admin-panel-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: var(--color-text);
+}
+.admin-section {
+  margin-bottom: 16px;
+}
+
+/* 관리자 패널 후보자 목록 아이템 */
+.candidate-admin-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.candidate-admin-item:last-child { border-bottom: none; }
+.cand-num {
+  min-width: 24px;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+.cand-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: #f3f4f6;
+}
+.cand-admin-name {
+  flex: 1;
+  font-size: 0.9rem;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 이미지 미리보기 */
+.img-preview-wrap {
+  margin-top: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 8px;
+  background: #f8fafc;
+}
+.img-preview {
+  max-width: 160px;
+  max-height: 160px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+
 /* ─── 반응형 ─────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
   .header-inner  { padding: 10px 14px; }
   #app-main      { padding: 18px 14px; }
   .overlay-card  { padding: 28px 20px; }
   .candidate-grid { grid-template-columns: 1fr; }
+  .status-banner { flex-direction: column; align-items: flex-start; gap: 6px; }
 }

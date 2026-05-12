@@ -150,6 +150,24 @@ describe("Voting Contract — Phase 1 TC-01~TC-08", function () {
     ).to.be.revertedWith("Voting already started");
   });
 
+  it("REVIEW: removeCandidate() — PREPARING에서 삭제 후 목록 축소", async function () {
+    await voting.addCandidate("후보자 A", "https://example.com/a.jpg");
+    await voting.addCandidate("후보자 B", "https://example.com/b.jpg");
+    await voting.addCandidate("후보자 C", "https://example.com/c.jpg");
+    await expect(voting.removeCandidate(1))
+      .to.emit(voting, "CandidateRemoved").withArgs(1n);
+    const list = await voting.getCandidates();
+    expect(list.length).to.equal(2);
+    expect(list[0].name).to.equal("후보자 A");
+    expect(list[1].name).to.equal("후보자 C"); // 순서 보존
+  });
+
+  it("REVIEW: removeCandidate() — ONGOING 상태에서 호출 시 revert", async function () {
+    await addTwoCandidates();
+    await voting.startVoting();
+    await expect(voting.removeCandidate(0)).to.be.revertedWith("Voting already started");
+  });
+
   it("REVIEW: CandidateAdded 이벤트 파라미터 검증", async function () {
     await expect(
       voting.addCandidate("후보자 A", "https://example.com/a.jpg")

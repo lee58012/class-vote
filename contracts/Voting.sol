@@ -21,6 +21,7 @@ contract Voting {
 
     // ─── 이벤트 (2.4 이벤트 명세) ────────────────────────────────────────────
     event CandidateAdded(uint256 indexed candidateId, string name, string photoUrl);
+    event CandidateRemoved(uint256 indexed candidateId);
     event VotingStarted();
     event VotingEnded();
     event Voted(address indexed voter, uint256 indexed candidateId);
@@ -45,6 +46,19 @@ contract Voting {
         uint256 candidateId = candidates.length;
         candidates.push(Candidate({ name: name, photoUrl: photoUrl, voteCount: 0 }));
         emit CandidateAdded(candidateId, name, photoUrl);
+    }
+
+    /// @notice 후보자 삭제 (FR-02-6: PREPARING 상태에서만)
+    function removeCandidate(uint256 candidateId) external onlyOwner {
+        require(votingStatus == VotingStatus.PREPARING, "Voting already started");
+        require(candidateId < candidates.length, "Invalid candidate");
+        // 순서 보존: 삭제 위치 이후 요소를 앞으로 이동
+        for (uint256 i = candidateId; i < candidates.length - 1; ) {
+            candidates[i] = candidates[i + 1];
+            unchecked { ++i; }
+        }
+        candidates.pop();
+        emit CandidateRemoved(candidateId);
     }
 
     /// @notice 투표 시작 (FR-03-1, FR-03-2)

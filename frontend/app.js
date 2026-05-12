@@ -589,20 +589,369 @@ function renderSCR00() {
     .addEventListener("keydown", e => { if (e.key === "Enter") connectExisting(); });
 }
 
-/* SCR-01: Phase 6에서 구현 */
-function renderSCR01() {
-  const status = state.votingStatus === 1n ? "🟢 진행 중"
-               : state.votingStatus === 0n ? "🟡 준비 중"
-               : "⏳ 확인 중...";
-  dom["app-main"].innerHTML = `
-    <div class="placeholder-screen">
-      <p style="font-size:1.5rem">${status}</p>
-      <h2>메인 투표 화면</h2>
-      <p class="text-muted mt-4">컨트랙트: <code>${state.contractAddress}</code></p>
-      <p class="mt-4" style="font-size:0.8rem; color:var(--color-text-light)">
-        📌 SCR-01/02 — Phase 4~6에서 구현됩니다
-      </p>
+// ══════════════════════════════════════════════════════════════════════════════
+// SCR-01 + SCR-02: 메인 투표 화면 + 관리자 패널 (Phase 4~6)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** 투표 상태에 따른 뱃지·레이블 반환 */
+function getStatusInfo() {
+  switch (state.votingStatus) {
+    case 0n: return { key: "preparing", label: "🟡 준비 중",  cls: "badge-preparing" };
+    case 1n: return { key: "ongoing",   label: "🟢 진행 중",  cls: "badge-ongoing"   };
+    case 2n: return { key: "ended",     label: "🔴 종료",     cls: "badge-ended"     };
+    default: return { key: "preparing", label: "⏳ 확인 중...", cls: "badge-preparing" };
+  }
+}
+
+/** 후보자 카드 HTML (득표 프로그레스 바 포함) — Phase 6에서 투표 버튼 추가 */
+function candidateCardHTML(c, i, totalVotes) {
+  const pct = totalVotes > 0 ? Math.round(Number(c.voteCount) / totalVotes * 100) : 0;
+  return `
+    <div class="candidate-card" id="cand-card-${i}">
+      <img src="${escHtml(c.photoUrl)}" alt="${escHtml(c.name)}"
+        class="candidate-photo"
+        onerror="this.style.display='none';document.getElementById('cph-${i}').style.display='flex'">
+      <div class="candidate-photo-placeholder" id="cph-${i}" style="display:none">👤</div>
+      <div class="candidate-name">${escHtml(c.name)}</div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="pf-${i}" style="width:${pct}%"></div>
+      </div>
+      <div class="vote-count" id="vc-${i}">${pct}% · ${c.voteCount}표</div>
+      <div id="vote-btn-${i}" class="mt-2"><!-- Phase 6: 투표 버튼 --></div>
     </div>`;
+}
+
+/** 관리자 패널 후보자 목록의 각 아이템 HTML */
+function adminCandidateItemHTML(c, i, canEdit) {
+  return `
+    <div class="candidate-admin-item" id="admin-cand-${i}">
+      <span class="cand-num">${i + 1}.</span>
+      <img src="${escHtml(c.photoUrl)}" alt=""
+        class="cand-thumb"
+        onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22/>'">
+      <span class="cand-admin-name">${escHtml(c.name)}</span>
+      <button class="btn btn-sm btn-danger"
+        id="btn-remove-${i}"
+        ${canEdit ? "" : "disabled"}
+        onclick="handleRemoveCandidate(${i})">✕</button>
+    </div>`;
+}
+
+/** 관리자 패널 HTML (Phase 4: 후보자 등록, Phase 5: 투표 제어) */
+function adminPanelHTML() {
+  const isPreparing = state.votingStatus === 0n;
+  const isOngoing   = state.votingStatus === 1n;
+  const candCount   = state.candidates.length;
+
+  return `
+    <div class="admin-panel">
+      <div class="admin-panel-title">⚙️ 관리자 패널</div>
+
+      <!-- ── 후보자 등록 폼 (PREPARING만) ── -->
+      <div class="card admin-section">
+        <div class="card-title">후보자 등록
+          ${!isPreparing ? '<span class="badge badge-ended" style="font-size:0.7rem">투표 시작 후 잠금</span>' : ""}
+        </div>
+        ${isPreparing ? `
+          <div class="form-group">
+            <label class="form-label" for="input-cand-name">이름 (1~50자)</label>
+            <input type="text" id="input-cand-name" class="form-input"
+              maxlength="50" placeholder="후보자 이름">
+            <div id="cand-name-err" class="form-error hidden"></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="input-cand-url">사진 URL (https://...)</label>
+            <input type="text" id="input-cand-url" class="form-input"
+              placeholder="https://example.com/photo.jpg"
+              autocomplete="off">
+            <div id="cand-url-err" class="form-error hidden"></div>
+            <div id="img-preview-wrap" class="img-preview-wrap hidden">
+              <img id="img-preview" class="img-preview" alt="미리보기">
+              <p id="img-preview-err" class="form-error hidden">
+                이미지를 불러올 수 없습니다. 직접 임베드 가능한 URL을 사용하세요.<br>
+                (imgur, GitHub raw 파일 권장 — Google Drive 링크 불가)
+              </p>
+            </div>
+          </div>
+          <button id="btn-add-cand" class="btn btn-primary">+ 후보자 등록</button>
+        ` : `<p class="text-muted">투표가 시작된 후에는 후보자를 등록할 수 없습니다.</p>`}
+      </div>
+
+      <!-- ── 등록된 후보자 목록 ── -->
+      <div class="card admin-section">
+        <div class="card-title">등록된 후보자 목록
+          <span class="text-muted" style="font-size:0.85rem">현재 ${candCount}명</span>
+        </div>
+        <div id="admin-cand-list">
+          ${candCount === 0
+            ? '<p class="text-muted">등록된 후보자가 없습니다.</p>'
+            : state.candidates.map((c, i) => adminCandidateItemHTML(c, i, isPreparing)).join("")}
+        </div>
+        ${!isPreparing ? '<p class="text-muted mt-2" style="font-size:0.8rem">투표 시작 후 삭제 불가</p>' : ""}
+      </div>
+
+      <!-- ── 투표 제어 ── -->
+      <div class="card admin-section">
+        <div class="card-title">투표 제어</div>
+        <div class="flex-between mb-4">
+          <span>현재 상태:</span>
+          <span class="badge ${getStatusInfo().cls}">${getStatusInfo().label}</span>
+        </div>
+        <div class="flex gap-2">
+          <button id="btn-start-voting" class="btn btn-success"
+            ${isPreparing && candCount >= 2 ? "" : "disabled"}>
+            ▶ 투표 시작
+          </button>
+          <button id="btn-end-voting" class="btn btn-danger"
+            ${isOngoing ? "" : "disabled"}>
+            ■ 투표 종료
+          </button>
+        </div>
+        ${isPreparing && candCount < 2
+          ? '<p class="text-muted mt-2" style="font-size:0.8rem">후보자 2명 이상 등록 시 시작 가능</p>'
+          : ""}
+        <div id="voting-ctrl-status" class="deploy-status hidden mt-2"></div>
+      </div>
+    </div>`;
+}
+
+/** XSS 방지용 HTML 이스케이프 */
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/* SCR-01: 메인 투표 화면 (SCR-02 관리자 패널 포함) */
+function renderSCR01() {
+  const si         = getStatusInfo();
+  const totalVotes = state.candidates.reduce((s, c) => s + Number(c.voteCount), 0);
+
+  dom["app-main"].innerHTML = `
+    <div class="scr01-wrap">
+
+      <!-- 상태 배너 -->
+      <div class="status-banner status-banner-${si.key}">
+        <span class="badge ${si.cls}">${si.label}</span>
+        <span class="text-muted">총 투표수: <strong>${totalVotes}</strong>표</span>
+      </div>
+
+      <!-- 후보자 카드 -->
+      <div class="candidate-grid" id="candidate-grid">
+        ${state.candidates.length === 0
+          ? '<p class="text-muted text-center" style="grid-column:1/-1;padding:40px 0">등록된 후보자가 없습니다.</p>'
+          : state.candidates.map((c, i) => candidateCardHTML(c, i, totalVotes)).join("")}
+      </div>
+
+      <!-- 관리자 패널 (owner만) -->
+      ${state.isOwner ? adminPanelHTML() : ""}
+
+    </div>`;
+
+  bindSCR01Events();
+}
+
+/** SCR-01 이벤트 바인딩 (innerHTML 교체 후 매번 재등록) */
+function bindSCR01Events() {
+  // 후보자 등록 (Phase 4)
+  const btnAdd = document.getElementById("btn-add-cand");
+  if (btnAdd) {
+    btnAdd.addEventListener("click", handleAddCandidate);
+
+    // 사진 URL 실시간 미리보기 (FR-02-4)
+    const urlInput = document.getElementById("input-cand-url");
+    let previewTimer = null;
+    urlInput?.addEventListener("input", () => {
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(() => updateImagePreview(urlInput.value.trim()), 400);
+    });
+  }
+
+  // 투표 시작/종료 (Phase 5)
+  document.getElementById("btn-start-voting")?.addEventListener("click", handleStartVoting);
+  document.getElementById("btn-end-voting")?.addEventListener("click", handleEndVoting);
+
+  // Phase 6: 투표 버튼 바인딩
+  bindVoteButtons();
+}
+
+// ── Phase 4: 후보자 등록 ─────────────────────────────────────────────────────
+
+/** FR-02-4: 사진 URL 실시간 미리보기 */
+function updateImagePreview(url) {
+  const wrap  = document.getElementById("img-preview-wrap");
+  const img   = document.getElementById("img-preview");
+  const errEl = document.getElementById("img-preview-err");
+  if (!wrap || !img) return;
+
+  if (!url || !url.startsWith("http")) {
+    wrap.classList.add("hidden");
+    return;
+  }
+  wrap.classList.remove("hidden");
+  errEl.classList.add("hidden");
+  img.style.display = "block";
+  img.src = url;
+  img.onerror = () => {
+    img.style.display = "none";
+    errEl.classList.remove("hidden");
+  };
+  img.onload = () => {
+    img.style.display = "block";
+    errEl.classList.add("hidden");
+  };
+}
+
+/** FR-02-1, FR-02-2, FR-02-3: 후보자 등록 트랜잭션 */
+async function handleAddCandidate() {
+  const nameEl  = document.getElementById("input-cand-name");
+  const urlEl   = document.getElementById("input-cand-url");
+  const nameErr = document.getElementById("cand-name-err");
+  const urlErr  = document.getElementById("cand-url-err");
+  const btn     = document.getElementById("btn-add-cand");
+
+  const name = nameEl?.value.trim() ?? "";
+  const url  = urlEl?.value.trim()  ?? "";
+
+  // 프론트엔드 유효성 검증
+  let valid = true;
+  nameErr.textContent = ""; nameErr.classList.add("hidden");
+  urlErr.textContent  = ""; urlErr.classList.add("hidden");
+
+  if (name.length < 1 || name.length > 50) {
+    nameErr.textContent = "이름은 1자 이상 50자 이하여야 합니다.";
+    nameErr.classList.remove("hidden");
+    valid = false;
+  }
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    urlErr.textContent = "사진 URL은 http:// 또는 https://로 시작해야 합니다.";
+    urlErr.classList.remove("hidden");
+    valid = false;
+  }
+  if (url.toLowerCase().includes("drive.google.com")) {
+    urlErr.textContent = "Google Drive 링크는 <img> 직접 임베드 불가합니다. imgur 또는 GitHub raw URL을 사용하세요.";
+    urlErr.classList.remove("hidden");
+    valid = false;
+  }
+  if (!valid) return;
+
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> 등록 중...`;
+
+  try {
+    const tx = await state.contract.addCandidate(name, url);
+    await tx.wait();
+    // 온체인 상태 갱신
+    state.candidates = [...await state.contract.getCandidates()];
+    renderSCR01();
+    showToast(`✅ ${name} 등록 완료`);
+  } catch (err) {
+    showToast("후보자 등록 실패: " + (err.reason ?? err.message ?? "오류 발생"));
+    btn.disabled = false;
+    btn.textContent = "+ 후보자 등록";
+  }
+}
+
+/** FR-02-6: 후보자 삭제 트랜잭션 (전역 — onclick에서 호출) */
+window.handleRemoveCandidate = async function(i) {
+  if (!window.confirm(`"${state.candidates[i]?.name}" 을(를) 삭제하시겠습니까?`)) return;
+  const btn = document.getElementById(`btn-remove-${i}`);
+  if (btn) { btn.disabled = true; btn.textContent = "..."; }
+  try {
+    const tx = await state.contract.removeCandidate(i);
+    await tx.wait();
+    state.candidates = [...await state.contract.getCandidates()];
+    renderSCR01();
+    showToast("후보자가 삭제되었습니다.");
+  } catch (err) {
+    showToast("삭제 실패: " + (err.reason ?? err.message ?? "오류 발생"));
+    renderSCR01();
+  }
+};
+
+// ── Phase 5: 투표 시작/종료 ──────────────────────────────────────────────────
+
+/** FR-03-5: 확인 다이얼로그 → 트랜잭션 */
+async function handleStartVoting() {
+  if (!window.confirm(
+    "투표를 시작하시겠습니까?\n시작 후에는 후보자를 추가하거나 삭제할 수 없습니다."
+  )) return;
+
+  const btn      = document.getElementById("btn-start-voting");
+  const statusEl = document.getElementById("voting-ctrl-status");
+  btn.disabled   = true;
+  btn.innerHTML  = `<span class="spinner"></span> 처리 중...`;
+  statusEl.className = "deploy-status deploy-status-info";
+  statusEl.textContent = "⏳ MetaMask 서명 대기 중...";
+
+  try {
+    const tx = await state.contract.startVoting();
+    statusEl.textContent = "⏳ 트랜잭션 확인 중...";
+    await tx.wait();
+    state.votingStatus = await state.contract.getVotingStatus();
+    renderCurrentScreen();
+    showToast("🟢 투표가 시작되었습니다.");
+  } catch (err) {
+    statusEl.className = "deploy-status deploy-status-error";
+    statusEl.textContent = "❌ " + (err.reason ?? getDeployErrorMsg(err));
+    btn.disabled = false;
+    btn.innerHTML = "▶ 투표 시작";
+  }
+}
+
+async function handleEndVoting() {
+  if (!window.confirm(
+    "투표를 종료하시겠습니까?\n종료 후에는 재시작이 불가능합니다."
+  )) return;
+
+  const btn      = document.getElementById("btn-end-voting");
+  const statusEl = document.getElementById("voting-ctrl-status");
+  btn.disabled   = true;
+  btn.innerHTML  = `<span class="spinner"></span> 처리 중...`;
+  statusEl.className = "deploy-status deploy-status-info";
+  statusEl.textContent = "⏳ MetaMask 서명 대기 중...";
+
+  try {
+    const tx = await state.contract.endVoting();
+    statusEl.textContent = "⏳ 트랜잭션 확인 중...";
+    await tx.wait();
+    state.votingStatus = await state.contract.getVotingStatus();
+    state.candidates   = [...await state.contract.getCandidates()];
+    renderCurrentScreen();
+    showToast("🔴 투표가 종료되었습니다.");
+  } catch (err) {
+    statusEl.className = "deploy-status deploy-status-error";
+    statusEl.textContent = "❌ " + (err.reason ?? getDeployErrorMsg(err));
+    btn.disabled = false;
+    btn.innerHTML = "■ 투표 종료";
+  }
+}
+
+// ── Phase 5: 폴링 — 득표수 부분 갱신 ────────────────────────────────────────
+
+/** 10초 폴링 시 후보자 카드 득표수·프로그레스 바만 업데이트 (전체 재렌더 없이) */
+function refreshVoteDisplay() {
+  const totalVotes = state.candidates.reduce((s, c) => s + Number(c.voteCount), 0);
+
+  // 상태 배너 총 투표수
+  const bannerCount = document.querySelector(".status-banner strong");
+  if (bannerCount) bannerCount.textContent = totalVotes;
+
+  state.candidates.forEach((c, i) => {
+    const pct     = totalVotes > 0 ? Math.round(Number(c.voteCount) / totalVotes * 100) : 0;
+    const pfEl    = document.getElementById(`pf-${i}`);
+    const vcEl    = document.getElementById(`vc-${i}`);
+    if (pfEl) pfEl.style.width     = `${pct}%`;
+    if (vcEl) vcEl.textContent     = `${pct}% · ${c.voteCount}표`;
+  });
+}
+
+/** Phase 6에서 구현 — 투표 버튼 바인딩 플레이스홀더 */
+function bindVoteButtons() {
+  // Phase 6에서 채워짐
 }
 
 /* SCR-03: Phase 7에서 구현 */
