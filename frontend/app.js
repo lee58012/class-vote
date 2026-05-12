@@ -329,9 +329,18 @@ async function pollContractState() {
   }
 }
 
-/** 투표 중 득표수/프로그레스 바만 갱신 (화면 전체 재렌더 없이) — Phase 6에서 구현 */
+/** 투표 중 득표수/프로그레스 바만 갱신 (화면 전체 재렌더 없이) */
 function refreshVoteDisplay() {
-  // Phase 6에서 채워짐
+  const totalVotes = state.candidates.reduce((s, c) => s + Number(c.voteCount), 0);
+  const bannerCount = document.querySelector(".status-banner strong");
+  if (bannerCount) bannerCount.textContent = totalVotes;
+  state.candidates.forEach((c, i) => {
+    const pct  = totalVotes > 0 ? Math.round(Number(c.voteCount) / totalVotes * 100) : 0;
+    const pfEl = document.getElementById(`pf-${i}`);
+    const vcEl = document.getElementById(`vc-${i}`);
+    if (pfEl) pfEl.style.width  = `${pct}%`;
+    if (vcEl) vcEl.textContent  = `${pct}% · ${c.voteCount}표`;
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -603,9 +612,21 @@ function getStatusInfo() {
   }
 }
 
-/** 후보자 카드 HTML (득표 프로그레스 바 포함) — Phase 6에서 투표 버튼 추가 */
+/** 후보자 카드 HTML (득표 프로그레스 바 + 투표 버튼 포함) */
 function candidateCardHTML(c, i, totalVotes) {
   const pct = totalVotes > 0 ? Math.round(Number(c.voteCount) / totalVotes * 100) : 0;
+
+  let voteArea = "";
+  if (state.votingStatus === 1n) {   // ONGOING
+    if (!state.account) {
+      voteArea = `<p class="vote-need-wallet">지갑 연결 후 투표 가능</p>`;
+    } else if (state.hasVoted) {
+      voteArea = `<div class="vote-done-badge">✅ 투표 완료</div>`;
+    } else {
+      voteArea = `<button class="btn btn-primary btn-vote" id="btn-vote-${i}" data-idx="${i}">투표하기</button>`;
+    }
+  }
+
   return `
     <div class="candidate-card" id="cand-card-${i}">
       <img src="${escHtml(c.photoUrl)}" alt="${escHtml(c.name)}"
@@ -617,7 +638,7 @@ function candidateCardHTML(c, i, totalVotes) {
         <div class="progress-fill" id="pf-${i}" style="width:${pct}%"></div>
       </div>
       <div class="vote-count" id="vc-${i}">${pct}% · ${c.voteCount}표</div>
-      <div id="vote-btn-${i}" class="mt-2"><!-- Phase 6: 투표 버튼 --></div>
+      <div id="vote-btn-${i}" class="mt-2">${voteArea}</div>
     </div>`;
 }
 
@@ -930,28 +951,38 @@ async function handleEndVoting() {
   }
 }
 
-// ── Phase 5: 폴링 — 득표수 부분 갱신 ────────────────────────────────────────
+// ── Phase 6: 투표 버튼 바인딩 + 투표 실행 ───────────────────────────────────
 
-/** 10초 폴링 시 후보자 카드 득표수·프로그레스 바만 업데이트 (전체 재렌더 없이) */
-function refreshVoteDisplay() {
-  const totalVotes = state.candidates.reduce((s, c) => s + Number(c.voteCount), 0);
-
-  // 상태 배너 총 투표수
-  const bannerCount = document.querySelector(".status-banner strong");
-  if (bannerCount) bannerCount.textContent = totalVotes;
-
-  state.candidates.forEach((c, i) => {
-    const pct     = totalVotes > 0 ? Math.round(Number(c.voteCount) / totalVotes * 100) : 0;
-    const pfEl    = document.getElementById(`pf-${i}`);
-    const vcEl    = document.getElementById(`vc-${i}`);
-    if (pfEl) pfEl.style.width     = `${pct}%`;
-    if (vcEl) vcEl.textContent     = `${pct}% · ${c.voteCount}표`;
+/** 투표 버튼에 이벤트 리스너 연결 (renderSCR01 → bindSCR01Events 에서 호출) */
+function bindVoteButtons() {
+  document.querySelectorAll(".btn-vote").forEach(btn => {
+    btn.addEventListener("click", () => handleVote(Number(btn.dataset.idx)));
   });
 }
 
-/** Phase 6에서 구현 — 투표 버튼 바인딩 플레이스홀더 */
-function bindVoteButtons() {
-  // Phase 6에서 채워짐
+/** FR-04-1 ~ FR-04-8: 투표 트랜잭션 실행 */
+async function handleVote(i) {
+  const btn = document.getElementById(`btn-vote-${i}`);
+  if (!btn || btn.disabled) return;
+
+  btn.disabled  = true;
+  btn.innerHTML = `<span class="spinner"></span> 처리 중...`;
+
+  try {
+    const tx = await state.contract.vote(i);
+    btn.innerHTML = `<span class="spinner spinner-dark"></span> 확인 중...`;
+    await tx.wait();
+
+    state.hasVoted   = true;
+    state.candidates = [...await state.contract.getCandidates()];
+    renderSCR01();
+    showToast("✅ 투표가 완료되었습니다!");
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "투표하기";
+    const msg = err.reason ?? getDeployErrorMsg(err);
+    showToast("투표 실패: " + msg);
+  }
 }
 
 /* SCR-03: Phase 7에서 구현 */

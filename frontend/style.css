@@ -601,6 +601,32 @@ code {
   display: block;
 }
 
+/* ─── SCR-01: 투표 버튼 (Phase 6) ──────────────────────────────── */
+.btn-vote {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.vote-done-badge {
+  display: block;
+  width: 100%;
+  padding: 7px 0;
+  border-radius: var(--radius);
+  background: var(--color-success-bg);
+  color: #065f46;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-align: center;
+  margin-top: 4px;
+}
+
+.vote-need-wallet {
+  font-size: 0.78rem;
+  color: var(--color-text-light);
+  text-align: center;
+  margin-top: 4px;
+}
+
 /* ─── 반응형 ─────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
   .header-inner  { padding: 10px 14px; }
