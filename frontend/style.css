@@ -392,6 +392,19 @@ code {
   margin-top: 4px;
 }
 
+.form-input-file {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  background: #f8fafc;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.form-input-file:hover { border-color: var(--color-primary); }
+
 /* ─── 스피너 ─────────────────────────────────────────────────────── */
 .spinner {
   display: inline-block;

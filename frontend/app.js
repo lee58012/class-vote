@@ -7,14 +7,19 @@
 
 import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.min.js";
 import { VOTING_ABI, VOTING_BYTECODE } from "./contract.js";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 상수
 // ══════════════════════════════════════════════════════════════════════════════
-const SEPOLIA_CHAIN_ID = 11155111n;          // BigInt — chainId 비교 기준
-const SEPOLIA_HEX      = "0xaa36a7";         // wallet_switchEthereumChain 용
-const STORAGE_KEY      = "votingContractAddress"; // localStorage 키 (단일 키 원칙)
-const POLL_MS          = 10_000;             // 10초 폴링 주기 (NFR-04-2)
+const SEPOLIA_CHAIN_ID  = 11155111n;
+const SEPOLIA_HEX       = "0xaa36a7";
+const STORAGE_KEY       = "votingContractAddress";
+const POLL_MS           = 10_000;
+const SUPABASE_URL      = "https://crlhgsmltkcwhgctqdtw.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_64tmBdGMv50mohtiwirL6Q_Q0NWxSaN";
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 앱 상태 (단일 진실의 원천)
@@ -150,6 +155,50 @@ function updateFooter() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Supabase — 후보자 메타데이터 로드 + 사진 업로드
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** 온체인 voteCount + Supabase 메타데이터(name, photo_url)를 병합하여 state.candidates 갱신 */
+async function loadCandidates() {
+  if (!state.contract || !state.contractAddress) return;
+
+  const onChain = [...await state.contract.getCandidates()];
+
+  const { data: meta, error } = await supabase
+    .from("candidates")
+    .select("id, name, photo_url")
+    .eq("contract_address", state.contractAddress.toLowerCase())
+    .order("id", { ascending: true });
+
+  if (error) console.warn("Supabase 조회 오류:", error.message);
+
+  state.candidates = onChain.map((c, i) => ({
+    supabaseId: meta?.[i]?.id ?? i,
+    name:       meta?.[i]?.name       ?? `후보자 ${i + 1}`,
+    photoUrl:   meta?.[i]?.photo_url  ?? "",
+    voteCount:  c.voteCount,
+  }));
+}
+
+/** Supabase Storage에 이미지 업로드 → 공개 URL 반환 */
+async function uploadCandidatePhoto(file) {
+  const ext      = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+
+  const { error } = await supabase.storage
+    .from("candidate-photos")
+    .upload(filename, file, { contentType: file.type, upsert: false });
+
+  if (error) throw new Error("사진 업로드 실패: " + error.message);
+
+  const { data } = supabase.storage
+    .from("candidate-photos")
+    .getPublicUrl(filename);
+
+  return data.publicUrl;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // 컨트랙트 연결 (Phase 3+ 에서 배포/입력 후 호출)
 // ══════════════════════════════════════════════════════════════════════════════
 async function connectContract(address) {
@@ -171,15 +220,15 @@ async function connectContract(address) {
 
   state.contract = new ethers.Contract(address, VOTING_ABI, runner);
 
-  // 온체인 초기 상태 읽기
+  // 온체인 + Supabase 초기 상태 읽기
   try {
     state.votingStatus = await state.contract.getVotingStatus();
-    state.candidates   = [...await state.contract.getCandidates()];
+    await loadCandidates();
 
     if (state.account) {
-      const ownerAddr  = await state.contract.owner();
-      state.isOwner    = ownerAddr.toLowerCase() === state.account.toLowerCase();
-      state.hasVoted   = await state.contract.hasVoted(state.account);
+      const ownerAddr = await state.contract.owner();
+      state.isOwner   = ownerAddr.toLowerCase() === state.account.toLowerCase();
+      state.hasVoted  = await state.contract.hasVoted(state.account);
     }
   } catch (err) {
     console.error("컨트랙트 데이터 읽기 오류:", err);
@@ -309,22 +358,25 @@ function stopPolling() {
 async function pollContractState() {
   if (!state.contract) return;
   try {
-    const prevStatus = state.votingStatus;
+    const prevStatus   = state.votingStatus;
     state.votingStatus = await state.contract.getVotingStatus();
-    state.candidates   = [...await state.contract.getCandidates()];
+
+    // 폴링 시 voteCount만 온체인에서 갱신 (메타데이터는 Supabase에서 이미 로드됨)
+    const onChain = [...await state.contract.getCandidates()];
+    onChain.forEach((c, i) => {
+      if (state.candidates[i]) state.candidates[i] = { ...state.candidates[i], voteCount: c.voteCount };
+    });
 
     if (state.account) {
       state.hasVoted = await state.contract.hasVoted(state.account);
     }
 
-    // 상태 변경 감지 시 화면 전환
     if (prevStatus !== state.votingStatus) {
       renderCurrentScreen();
     } else {
       refreshVoteDisplay();
     }
   } catch (err) {
-    // 일시적 네트워크 오류 — 무한 에러 루프 없이 다음 인터벌에 재시도
     console.warn("폴링 오류 (다음 주기에 재시도):", err.message);
   }
 }
@@ -681,17 +733,12 @@ function adminPanelHTML() {
             <div id="cand-name-err" class="form-error hidden"></div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="input-cand-url">사진 URL (https://...)</label>
-            <input type="text" id="input-cand-url" class="form-input"
-              placeholder="https://example.com/photo.jpg"
-              autocomplete="off">
-            <div id="cand-url-err" class="form-error hidden"></div>
+            <label class="form-label" for="input-cand-photo">사진 파일 (최대 5MB)</label>
+            <input type="file" id="input-cand-photo" class="form-input-file"
+              accept="image/*">
+            <div id="cand-photo-err" class="form-error hidden"></div>
             <div id="img-preview-wrap" class="img-preview-wrap hidden">
               <img id="img-preview" class="img-preview" alt="미리보기">
-              <p id="img-preview-err" class="form-error hidden">
-                이미지를 불러올 수 없습니다. 직접 임베드 가능한 URL을 사용하세요.<br>
-                (imgur, GitHub raw 파일 권장 — Google Drive 링크 불가)
-              </p>
             </div>
           </div>
           <button id="btn-add-cand" class="btn btn-primary">+ 후보자 등록</button>
@@ -782,12 +829,15 @@ function bindSCR01Events() {
   if (btnAdd) {
     btnAdd.addEventListener("click", handleAddCandidate);
 
-    // 사진 URL 실시간 미리보기 (FR-02-4)
-    const urlInput = document.getElementById("input-cand-url");
-    let previewTimer = null;
-    urlInput?.addEventListener("input", () => {
-      clearTimeout(previewTimer);
-      previewTimer = setTimeout(() => updateImagePreview(urlInput.value.trim()), 400);
+    // 파일 선택 시 로컬 미리보기
+    document.getElementById("input-cand-photo")?.addEventListener("change", e => {
+      const file = e.target.files?.[0];
+      const wrap = document.getElementById("img-preview-wrap");
+      const img  = document.getElementById("img-preview");
+      if (file && wrap && img) {
+        img.src = URL.createObjectURL(file);
+        wrap.classList.remove("hidden");
+      }
     });
   }
 
@@ -801,90 +851,95 @@ function bindSCR01Events() {
 
 // ── Phase 4: 후보자 등록 ─────────────────────────────────────────────────────
 
-/** FR-02-4: 사진 URL 실시간 미리보기 */
-function updateImagePreview(url) {
-  const wrap  = document.getElementById("img-preview-wrap");
-  const img   = document.getElementById("img-preview");
-  const errEl = document.getElementById("img-preview-err");
-  if (!wrap || !img) return;
-
-  if (!url || !url.startsWith("http")) {
-    wrap.classList.add("hidden");
-    return;
-  }
-  wrap.classList.remove("hidden");
-  errEl.classList.add("hidden");
-  img.style.display = "block";
-  img.src = url;
-  img.onerror = () => {
-    img.style.display = "none";
-    errEl.classList.remove("hidden");
-  };
-  img.onload = () => {
-    img.style.display = "block";
-    errEl.classList.add("hidden");
-  };
-}
-
-/** FR-02-1, FR-02-2, FR-02-3: 후보자 등록 트랜잭션 */
+/** 후보자 등록: 사진 → Supabase Storage, 메타데이터 → Supabase DB, slot → 블록체인 */
 async function handleAddCandidate() {
-  const nameEl  = document.getElementById("input-cand-name");
-  const urlEl   = document.getElementById("input-cand-url");
-  const nameErr = document.getElementById("cand-name-err");
-  const urlErr  = document.getElementById("cand-url-err");
-  const btn     = document.getElementById("btn-add-cand");
+  const nameEl   = document.getElementById("input-cand-name");
+  const photoEl  = document.getElementById("input-cand-photo");
+  const nameErr  = document.getElementById("cand-name-err");
+  const photoErr = document.getElementById("cand-photo-err");
+  const btn      = document.getElementById("btn-add-cand");
 
   const name = nameEl?.value.trim() ?? "";
-  const url  = urlEl?.value.trim()  ?? "";
+  const file = photoEl?.files?.[0];
 
-  // 프론트엔드 유효성 검증
   let valid = true;
-  nameErr.textContent = ""; nameErr.classList.add("hidden");
-  urlErr.textContent  = ""; urlErr.classList.add("hidden");
+  nameErr.textContent  = ""; nameErr.classList.add("hidden");
+  photoErr.textContent = ""; photoErr.classList.add("hidden");
 
   if (name.length < 1 || name.length > 50) {
     nameErr.textContent = "이름은 1자 이상 50자 이하여야 합니다.";
     nameErr.classList.remove("hidden");
     valid = false;
   }
-  if (!url.startsWith("http://") && !url.startsWith("https://")) {
-    urlErr.textContent = "사진 URL은 http:// 또는 https://로 시작해야 합니다.";
-    urlErr.classList.remove("hidden");
+  if (!file) {
+    photoErr.textContent = "사진 파일을 선택해주세요.";
+    photoErr.classList.remove("hidden");
     valid = false;
-  }
-  if (url.toLowerCase().includes("drive.google.com")) {
-    urlErr.textContent = "Google Drive 링크는 <img> 직접 임베드 불가합니다. imgur 또는 GitHub raw URL을 사용하세요.";
-    urlErr.classList.remove("hidden");
+  } else if (file.size > 5 * 1024 * 1024) {
+    photoErr.textContent = "파일 크기는 5MB 이하여야 합니다.";
+    photoErr.classList.remove("hidden");
     valid = false;
   }
   if (!valid) return;
 
-  btn.disabled = true;
-  btn.innerHTML = `<span class="spinner"></span> 등록 중...`;
+  btn.disabled  = true;
+  btn.innerHTML = `<span class="spinner"></span> 사진 업로드 중...`;
 
   try {
-    const tx = await state.contract.addCandidate(name, url);
-    await tx.wait();
-    // 온체인 상태 갱신
-    state.candidates = [...await state.contract.getCandidates()];
+    // ① Supabase Storage에 사진 업로드
+    const photoUrl = await uploadCandidatePhoto(file);
+
+    btn.innerHTML = `<span class="spinner"></span> 블록체인 등록 중...`;
+
+    // ② 블록체인에 후보자 slot 생성 (voteCount만 — 가스비 최소)
+    const tx      = await state.contract.addCandidate();
+    const receipt = await tx.wait();
+
+    // ③ 이벤트에서 candidateId 추출
+    const event = receipt.logs
+      .map(log => { try { return state.contract.interface.parseLog(log); } catch { return null; } })
+      .find(e => e?.name === "CandidateAdded");
+    const newId = Number(event.args.candidateId);
+
+    // ④ Supabase DB에 메타데이터 저장
+    const { error: dbErr } = await supabase.from("candidates").insert({
+      id:               newId,
+      contract_address: state.contractAddress.toLowerCase(),
+      name,
+      photo_url:        photoUrl,
+    });
+    if (dbErr) throw new Error("DB 저장 실패: " + dbErr.message);
+
+    await loadCandidates();
     renderSCR01();
     showToast(`✅ ${name} 등록 완료`);
   } catch (err) {
     showToast("후보자 등록 실패: " + (err.reason ?? err.message ?? "오류 발생"));
-    btn.disabled = false;
+    btn.disabled  = false;
     btn.textContent = "+ 후보자 등록";
   }
 }
 
-/** FR-02-6: 후보자 삭제 트랜잭션 (전역 — onclick에서 호출) */
+/** 후보자 삭제: 블록체인 + Supabase DB 동기화 */
 window.handleRemoveCandidate = async function(i) {
   if (!window.confirm(`"${state.candidates[i]?.name}" 을(를) 삭제하시겠습니까?`)) return;
+  const supabaseId = state.candidates[i]?.supabaseId;
   const btn = document.getElementById(`btn-remove-${i}`);
   if (btn) { btn.disabled = true; btn.textContent = "..."; }
   try {
+    // ① 블록체인에서 삭제
     const tx = await state.contract.removeCandidate(i);
     await tx.wait();
-    state.candidates = [...await state.contract.getCandidates()];
+
+    // ② Supabase DB에서 삭제 (positional ORDER BY id로 자동 재정렬됨)
+    if (supabaseId !== undefined) {
+      await supabase.from("candidates")
+        .delete()
+        .eq("id", supabaseId)
+        .eq("contract_address", state.contractAddress.toLowerCase());
+    }
+
+    await loadCandidates();
     renderSCR01();
     showToast("후보자가 삭제되었습니다.");
   } catch (err) {
